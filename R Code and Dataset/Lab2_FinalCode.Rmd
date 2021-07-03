@@ -1,0 +1,845 @@
+---
+title: "W203 Lab 2 Code"
+author: "Ziling Huang, Dhyani Parekh, Amber Rashid, Alice Ye"
+date: "11/16/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# install these packages if not already installed
+# install.packages("car")
+# install.packages("gvlma")
+# install.packages("stargazer")
+# install.packages("plotly")
+# install.packages("heatmaply")
+# install.packages("ggcorrplot")
+
+library(dplyr)
+library(graphics)
+library(car)
+library(gvlma)
+library(stargazer)
+library(janitor)
+library(tidyverse)
+library(heatmaply)
+library(ggcorrplot)
+library(plotly)
+library(plyr)
+library(reshape2)
+library(ggplot2)
+library(MASS)
+```
+
+```{r data upload, include=FALSE}
+data = read.csv('covid-19.csv', skip = 1, header = TRUE)
+summary(data)
+#Remove DC
+data <- data[-c(9), ]
+```
+
+```{r correlation functions}
+panel.hist <- function(x, ...) {
+  usr <- par("usr")
+  on.exit(par(usr))
+  par(usr = c(usr[1:2], 0, 1.5) )
+  h <- hist(x, plot = FALSE)
+  breaks <- h$breaks
+  nB <- length(breaks)
+  y <- h$counts
+  y <- y/max(y)
+  rect(breaks[-nB], 0, breaks[-1], y, col = "white", ...)
+}
+
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...) {
+  usr <- par("usr")
+  on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r <- abs(cor(x, y, use = "complete.obs"))
+  txt <- format(c(r, 0.123456789), digits = digits)[1]
+  txt <- paste(prefix, txt, sep = "")
+  if (missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+  text(0.5, 0.5, txt, cex =  cex.cor * (1 + r) / 2)
+}
+```
+
+```{r race correlation}
+# transforming cases by race/ethnicity to account for strings
+# assumption that <.01 will be 0.005 in our data
+data$pct_black_population <-
+  as.numeric(
+  if(data$Black...of.Total.Population == "<.01") {
+    0.005
+    } else {
+    data$Black...of.Total.Population  
+    }
+  )
+
+race_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         White...of.Total.Population,
+         pct_black_population,
+         Hispanic...of.Total.Population,
+         Other...of.Total.Population
+         )
+pairs(race_factors, labels = c('Case Rate', 'UI', 'White', 'Black', 'Hispanic', 'Other'),
+  upper.panel = panel.cor,
+  diag.panel  = panel.hist,
+  lower.panel = panel.smooth
+)
+
+#pct_black_population has the highest correlation with case rate
+```
+
+```{r age correlation}
+# age demographics are already in percent so no need to transform
+age_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         Children.0.18,
+         Adults.19.25,
+         Adults.26.34,
+         Adults.35.54,
+         Adults.55.64,
+         X65.)
+pairs(age_factors,labels = c('Case Rate', '0-18', '19-25', '26-34', '35-54', '55-64', '65+'),
+  upper.panel = panel.cor,
+  diag.panel  = panel.hist,
+  lower.panel = panel.smooth
+)
+
+# Children.0.18 and Adults.19.25 had the highest correlation with Case.Rate.per.100000
+```
+
+```{r, echo = FALSE,results = 'hide', error = FALSE, warning = FALSE, message = FALSE}
+age_factors_2 <- data %>%
+  dplyr::select(Case.Rate.per.100000, Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         Children.0.18,
+         Adults.19.25,
+         Adults.26.34,
+         Adults.35.54,
+         Adults.55.64,
+         X65.)
+pairs(age_factors_2,labels = c('Case Rate', 'UI', '0-18', '19-25', '26-34', '35-54', '55-64', '65+'),
+  upper.panel = panel.cor,
+  diag.panel  = panel.hist,
+  lower.panel = panel.smooth
+)
+```
+
+```{r mobility correlation}
+mobility_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         Retail...recreation,
+         Grocery...pharmacy,
+         Parks,
+         Transit.stations,
+         Workplaces,
+         Residential)
+pairs(mobility_factors,
+  upper.panel = panel.cor,
+  diag.panel  = panel.hist,
+  lower.panel = panel.smooth
+)
+
+# highest correlation:
+# Transit.stations = 0.26
+# Parks = 0.22
+# Retail...recreation = 0.19
+
+```
+
+```{r policy correlation}
+# creating new policy variables
+data$stay_at_home_days <- 
+  ifelse(data$End.stay.at.home.shelter.in.place != 0 & data$Stay.at.home..shelter.in.place != 0,
+         difftime(
+           strptime(data$End.stay.at.home.shelter.in.place, format = "%m/%d/%Y"),
+           strptime(data$Stay.at.home..shelter.in.place, format = "%m/%d/%Y"),
+           units = "days"),
+         ifelse(data$End.stay.at.home.shelter.in.place != 0 & data$Stay.at.home..shelter.in.place == 0,
+                difftime(
+                  strptime(data$End.stay.at.home.shelter.in.place, format = "%m/%d/%Y"),
+                  strptime(data$State.of.emergency, format = "%m/%d/%Y"),
+                  units = "days"),
+                ifelse(data$End.stay.at.home.shelter.in.place == 0 & data$Stay.at.home..shelter.in.place != 0,
+                       difftime(
+                         # date that dataset was published
+                         strptime("10/26/2020", format = "%m/%d/%Y"),
+                         strptime(data$State.of.emergency, format = "%m/%d/%Y"),
+                         units = "days"),
+                       0
+                )
+         )
+  )
+
+data$closed_business_days <- 
+  ifelse(data$Closed.other.non.essential.businesses != 0 & data$Began.to.reopen.businesses.statewide != 0,
+         difftime(
+           strptime(data$Began.to.reopen.businesses.statewide, format = "%m/%d/%y"),
+           strptime(data$Closed.other.non.essential.businesses, format = "%m/%d/%Y"),
+           units = "days"),
+         ifelse(data$Closed.other.non.essential.businesses != 0 & data$Began.to.reopen.businesses.statewide == 0,
+                difftime(
+                  strptime(data$Began.to.reopen.businesses.statewide, format = "%m/%d/%y"),
+                  strptime(data$Closed.other.non.essential.businesses, format = "%m/%d/%Y"),
+                  units = "days"),
+                ifelse(data$Closed.other.non.essential.businesses == 0 & data$Began.to.reopen.businesses.statewide != 0,
+                       difftime(
+                         strptime(data$State.of.emergency, format = "%m/%d/%y"),
+                         # date that dataset was published
+                         strptime("10/26/2020", format = "%m/%d/%Y"),
+                         units = "days"),
+                       0
+                )
+         )
+  ) 
+
+data$days_till_emergency <- 
+  ifelse(data$State.of.emergency == 0,
+         difftime(
+           # date that dataset was published
+           strptime("10/26/2020", format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days"),
+         difftime(
+           strptime(data$State.of.emergency, format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days")
+  )
+
+data$days_till_business_close <- 
+  ifelse(data$Closed.other.non.essential.businesses == 0,
+         difftime(
+           strptime("10/26/2020", format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days"),
+         difftime(
+           strptime(data$Closed.other.non.essential.businesses, format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days")
+  )
+
+data$days_till_stay_at_home <- 
+  ifelse(data$End.stay.at.home.shelter.in.place == 0 & data$Stay.at.home..shelter.in.place == 0,
+         difftime(
+           strptime("10/26/2020", format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days"),
+         ifelse(data$End.stay.at.home.shelter.in.place != 0 & data$Stay.at.home..shelter.in.place == 0,
+                difftime(
+                  # assume first day of stay at home was the date state of emergency was declared
+                  strptime(data$State.of.emergency, format = "%m/%d/%Y"),
+                  # date that first US COVID was diagnosed
+                  strptime("01/20/2020", format = "%m/%d/%Y"),
+                  units = "days"),
+                difftime(
+                  strptime(data$Stay.at.home..shelter.in.place, format = "%m/%d/%Y"),
+                  # date that first US COVID was diagnosed
+                  strptime("01/20/2020", format = "%m/%d/%Y"),
+                  units = "days")
+         )
+  )
+data$days_till_ind_mask <- 
+  ifelse(data$Mandate.face.mask.use.by.all.individuals.in.public.spaces == 0,
+         difftime(
+           strptime("10/26/2020", format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days"),
+         difftime(
+           strptime(data$Mandate.face.mask.use.by.all.individuals.in.public.spaces, format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days")
+  )
+data$days_till_emp_mask <- 
+  ifelse(data$Mandate.face.mask.use.by.employees.in.public.facing.businesses == 0,
+         difftime(
+           strptime("10/26/2020", format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days"),
+         difftime(
+           strptime(data$Mandate.face.mask.use.by.employees.in.public.facing.businesses, format = "%m/%d/%Y"),
+           # date that first US COVID was diagnosed
+           strptime("01/20/2020", format = "%m/%d/%Y"),
+           units = "days")
+  )
+
+policy_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         stay_at_home_days,
+         closed_business_days,
+         days_till_emergency,
+         days_till_business_close,
+         days_till_stay_at_home,
+         days_till_ind_mask,
+         days_till_emp_mask)
+pairs(policy_factors,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+policy_factors2 <- data %>%
+  dplyr::select(Case.Rate.per.100000, Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         stay_at_home_days,closed_business_days,
+         days_till_emergency,
+         days_till_stay_at_home,
+         days_till_business_close,days_till_ind_mask,
+         days_till_emp_mask)
+pairs(policy_factors2,c('Case Rate', 'UI', 'Stay Home Orders', 'Business Closed', 'Days Til Emergency', 'Days til Business close', 'Days til stay home', 'Days til ind. mask','Days til emp. mask'),
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+policy_factors3 <- data %>%
+  dplyr::select(Case.Rate.per.100000, Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         stay_at_home_days,closed_business_days,
+        )
+pairs(policy_factors3,c('Case Rate', 'UI', 'Home Orders', 'Business Closed'),
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+policy_factors4 <- data %>%
+  dplyr::select(Case.Rate.per.100000, Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         days_till_emergency,
+         days_till_stay_at_home,
+         days_till_business_close,days_till_ind_mask,
+         days_till_emp_mask)
+pairs(policy_factors4,c('Case Rate', 'UI',  'DU Emergency', 'DU Business close', 'DU stay home', 'DU ind. mask','DU emp. mask'),
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+
+# strongest correlations:
+# days_till_stay_at_home = 0.37
+# stay_at_home_days = 0.32
+# days_till_emp_mask = 0.33
+# days_till_business_close = 0.31
+```
+
+```{r state correlation}
+# creating new variables for state characteristics
+# extracting State Governor's party affiliation from Governor's name
+data$gov_party <- gsub("[\\(\\)]", "", regmatches(data$Governor, gregexpr("\\(.*?\\)", data$Governor))[])
+data$gov_party <- ifelse(data$gov_party == "R", 1, 0)
+# transforming some state characteristics for more normal distributions
+#data$log_population_density <- log(data$Population.density.per.square.miles)
+# we ultimately chose to not use log of population density
+data$pct_homeless <- data$Number.Homeless..2019./data$Population.2018
+data$pct_nonelderly_atrisk <- data$Nonelderly.Adults.Who.Have.A.Pre.Existing.Condition/data$Population.2018
+data$Medicaid.Expenditures.as.a.Percent.of.Total.State.Expenditures.by.Fund <-
+  ifelse(
+    data$Medicaid.Expenditures.as.a.Percent.of.Total.State.Expenditures.by.Fund == "N/A",
+    # DC was the state that needs this value manually added
+    # value found through rough research online
+    3022166476 / 13300000000,
+    as.numeric(data$Medicaid.Expenditures.as.a.Percent.of.Total.State.Expenditures.by.Fund)
+  )
+
+data$Life.Expectancy.at.Birth..years. <-
+  ifelse(
+    data$Life.Expectancy.at.Birth..years. == "N/A" & data$State == "Maine",
+    # DC was the state that needs this value manually added
+    # value found through rough research online
+    78.7,
+    ifelse(data$Life.Expectancy.at.Birth..years. == "N/A" & data$State == "Wisconsin",
+           79.4,
+           as.numeric(data$Life.Expectancy.at.Birth..years.)
+    )
+  )
+
+state_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         gov_party,
+         #log_population_density,
+         pct_homeless,
+         pct_nonelderly_atrisk,
+         Percent.at.risk.for.serious.illness.due.to.COVID,
+         Medicaid.Expenditures.as.a.Percent.of.Total.State.Expenditures.by.Fund,
+         Life.Expectancy.at.Birth..years.,
+         Percent.Unemployed..2018.,
+         Percent.living.under.the.federal.poverty.line..2018.,
+         Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.)
+pairs(state_factors,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+
+state_factors2 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         pct_nonelderly_atrisk,
+         Percent.at.risk.for.serious.illness.due.to.COVID,
+         Life.Expectancy.at.Birth..years.,
+         Percent.Unemployed..2018.,
+         Percent.living.under.the.federal.poverty.line..2018.,
+         )
+pairs(state_factors2, labels = c('Case Rate', 'UI', 'non-elder at risk', 'pct srs illness', 'life exp.', 'Pct Unemployed', 'Pct Under Poverty'),
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+# highest correlations:
+# Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars. = 0.31
+# Percent.living.under.the.federal.poverty.line..2018. = 0.28
+# gov_party = 0.26
+```
+
+```{r age mobility correlation2}
+# correlation between age and mobility
+age_mobility_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         Children.0.18,
+         Adults.19.25,
+         Transit.stations,
+         Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.)
+pairs(age_mobility_factors,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+age_mobility_factors2 <- data %>%
+  dplyr::select(Case.Rate.per.100000,Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         Adults.19.25,
+         Transit.stations,)
+pairs(age_mobility_factors2,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+mobility_factors_ar <- data %>%
+  dplyr::select(Case.Rate.per.100000,Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars., 
+         Retail...recreation,
+         Grocery...pharmacy,
+         Parks,
+         Transit.stations,
+         Workplaces,
+         Residential)
+pairs(mobility_factors_ar, labels = c('Case Rate', 'Weekly UI', 'Recreation', 'Grocery etc.', 'Parks', 'Transit', 'Workplaces', 'Residential'), 
+  upper.panel = panel.cor,
+  diag.panel  = panel.hist,
+  lower.panel = panel.smooth
+)
+```
+
+```{r final correlation2}
+# correlation between age and mobility
+final_factors <- data %>%
+  dplyr::select(Case.Rate.per.100000,Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         Adults.19.25,
+         days_till_stay_at_home,
+         days_till_emp_mask,
+         gov_party,
+         Population.density.per.square.miles,
+         Tests.per.100K)
+pairs(final_factors, labels = c('Case Rate', 'UI', '19-25', 'DU stay home', 'DU Emp Mask', 'Gov Party', 'Pop Dens.', 'Tests/100k'),
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+```
+
+```{r model checks}
+# model checks
+modz4 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+         Adults.19.25,
+         Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         days_till_stay_at_home,
+         days_till_emp_mask,
+         gov_party,
+         Population.density.per.square.miles,
+         Tests.per.100K)
+modz4
+pairs(modz4,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+# model checks
+modz6 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+                Adults.19.25,
+                Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                Population.density.per.square.miles)
+modz6
+pairs(modz6,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+# model checks
+modz5 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+                Adults.19.25,
+                Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                Tests.per.100K)
+modz5
+pairs(modz5,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+# model checks
+modz4 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+                Adults.19.25,
+                Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                days_till_stay_at_home,
+                days_till_emp_mask,
+                gov_party)
+modz4
+pairs(modz4,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+
+modz7 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+                Adults.19.25,
+                Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                days_till_emp_mask,
+                gov_party)
+modz7
+pairs(modz7,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+modz8 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+                Adults.19.25,
+                Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                days_till_stay_at_home)
+modz8
+pairs(modz8,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+modz9 <- data %>%
+  dplyr::select(Case.Rate.per.100000,
+                Adults.19.25,
+                Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                days_till_stay_at_home,
+                days_till_emp_mask,
+                gov_party,
+                Population.density.per.square.miles,
+                Tests.per.100K)
+modz9
+pairs(modz9,
+      upper.panel = panel.cor,
+      diag.panel  = panel.hist,
+      lower.panel = panel.smooth
+)
+
+#EDA of UI vs case rates scatter plot in particular
+scatter.smooth(x=data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars., y=data$Case.Rate.per.100000, main="UI vs Case")
+
+```
+
+```{r eda gov part and case rate}
+#EDA of govt party vs case rates scatter plot in particular
+scatter.smooth(x=data$gov_party, y=data$Case.Rate.per.100000, main="Gov vs Case")
+```
+
+```{r create models}
+#Specifying Models 1-3
+model1 <- lm(data$Case.Rate.per.100000 ~ data$Adults.19.25)
+summary(model1)
+model2 <- lm(data$Case.Rate.per.100000 ~  data$Adults.19.25 + data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.)
+summary(model2)
+model3 <- lm(data$Case.Rate.per.100000 ~data$Adults.19.25 + data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars. + data$days_till_stay_at_home + data$days_till_emp_mask + data$gov_party+data$Population.density.per.square.miles+ data$Tests.per.100K)
+summary(model3)
+```
+
+```{r section 2}
+##Question 2
+
+#Checking for outliers
+#Generally, any datapoint that lies outside the 1.5 * interquartile-range (1.5.*.IQR)
+#is considered an outlier, where, IQR is calculated as the distance between the 25th percentile and 75th percentile values for that variable.
+
+par(mfrow=c(1, 2))  # divide graph area in 2 columns
+#0.11 adults 19-25 makes sense
+boxplot(data$Adults.19.25, main="Adults.19.25", sub=paste("Outlier rows: ", boxplot.stats(data$Adults.19.25)$out))  # box plot for Adults.19.25
+
+par(mfrow=c(1, 2))  # divide graph area in 2 columns
+#No outliers for Weekly UI
+boxplot(data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars., main="Weekly UI", sub=paste("Outlier rows: ", boxplot.stats(data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.)$out))  # box plot for Weekly UI
+boxplot(data$Case.Rate.per.100000, main="Case Rates", sub=paste("Outlier rows: ", boxplot.stats(data$Case.Rate.per.100000)$out))  # box plot for Case Rate
+
+par(mfrow=c(1, 3)) # divide graph area in 3 columns
+#outliers are where we filled in the data points for days till stay home and days till emp mask
+boxplot(data$days_till_stay_at_home, main="Days till stay at home order", sub=paste("Outlier rows: ", boxplot.stats(data$days_till_stay_at_home)$out))  # box plot for days till stay at home
+boxplot(data$days_till_emp_mask, main="Days_till_emp_mask", sub=paste("Outlier rows: ", boxplot.stats(data$days_till_emp_mask)$out))  # box plot for days_till_emp_mask
+boxplot(data$gov_party, main="gov_party", sub=paste("Outlier rows: ", boxplot.stats(data$gov_party)$out))  # gov_party
+
+
+cor_covid <- dplyr::select(data,Adults.19.25,
+                    Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+                    days_till_stay_at_home,
+                    days_till_emp_mask, 
+                    Population.density.per.square.miles,
+                    Tests.per.100K,gov_party)
+cor_covid<-rename(cor_covid, c( "Adults.19.25"= "Adults.19to25",
+                    "Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars."="Weekly.UI" ,
+                    "days_till_stay_at_home"="Stay.home.days",
+                    "days_till_emp_mask"="Mask.days",
+                    "Population.density.per.square.miles"="Popln.Density",
+                    "Tests.per.100K"="Tests",
+                    "gov_party"="Gov_party")
+       )
+cor_covid
+
+
+cormat <- round(cor(cor_covid),2)
+head(cormat)
+
+
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+
+# Get lower triangle of the correlation matrix
+get_lower_tri<-function(cormat){
+  cormat[upper.tri(cormat)] <- NA
+  return(cormat)
+}
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+  cormat[lower.tri(cormat)]<- NA
+  return(cormat)
+}
+
+upper_tri <- get_upper_tri(cormat)
+upper_tri
+
+# Melt the correlation matrix
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+# Heatmap
+ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+  geom_tile(color = "white")+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1))+
+  coord_fixed()
+reorder_cormat <- function(cormat){
+  # Use correlation between variables as distance
+  dd <- as.dist((1-cormat)/2)
+  hc <- hclust(dd)
+  cormat <-cormat[hc$order, hc$order]
+}
+# Reorder the correlation matrix
+cormat <- reorder_cormat(cormat)
+upper_tri <- get_upper_tri(cormat)
+# Melt the correlation matrix
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+# Create a ggheatmap
+ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
+  geom_tile(color = "white")+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Pearson\nCorrelation") +
+  theme_minimal()+ # minimal theme
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1))+
+  coord_fixed()
+
+print(ggheatmap)
+ggheatmap + 
+  geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+  theme(axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    legend.justification = c(1, 0),
+    legend.position = c(0.6, 0.7),
+    legend.direction = "horizontal")+
+    guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+    title.position = "top", title.hjust = 0.5)
+    )
+```
+
+```{r section 3 CLM assumptions}
+##Question 3 Code
+
+#Linear Relationship
+par(mfrow=c(1, 3))
+#Model 1 is not linear
+plot(model1, 1)
+#Model 2 is linear
+plot(model2, 1)
+#Model 3 is linear
+plot(model3, 1)
+
+#mean of residuals is zero, yes for all 3 models
+mean(model1$residuals)
+mean(model2$residuals)
+mean(model3$residuals)
+
+
+# Normality of residuals
+par(mfrow=c(1, 3))
+#All 3 models have normally distributed residuals based on a visual reference
+plot(model1, 2)
+plot(model2, 2)
+plot(model3, 2)
+
+# To be more precise in terms of measuring normality of residuals, we use the ShapiroWilk's test
+# distribution of studentized residuals from model1 
+
+#residuals from model 1 are normally distributed since the p value is greater than 0.05 at 0.5017
+sresid <- studres(model1) 
+shapiro.test(sresid)
+
+#residuals from model 2 are normally distributed since the p value is greater than 0.05 at 0.446
+sresid2 <- studres(model2) 
+shapiro.test(sresid2)
+
+#residuals from model 3 are  normally distributed since the p value is greater than 0.05 at 0.9958
+sresid3 <- studres(model3) 
+shapiro.test(sresid3)
+
+#Examine homoskedasticity by looking at scale-location plot
+## model2 and 3 equally dispersed
+plot(model1, 3)
+plot(model2, 3)
+plot(model3, 3)
+
+#ncvTest() For Homoscedasticity
+
+# non-constant error variance test
+#Model 1,2 and 3 is homoscedastic because p >0.05
+ncvTest(model1)
+ncvTest(model2)
+ncvTest(model3)
+
+#Testing the Independence (Autocorrelation) Assumption
+#Durbin Watson Test for Autocorrelation
+#The Durbin Watson examines whether the 
+#errors are autocorrelated with themselves. 
+#The null states that they are not autocorrelated (what we want). 
+#this test is useful to verify that we havent violated the independence assumption.
+#p > 0.05, so the errors are not autocorrelated and the independence assumption is met for models 1-3
+durbinWatsonTest(model1)
+durbinWatsonTest(model2)
+durbinWatsonTest(model3)
+
+# detecting multicollinearity
+#see (Hair et al., 2010) for multicollinearity, if VIF value exceeds 4.0, or tolerance less than 0.2 is observed, then there is a problem with multicollinearity.
+#VIF is less than 3 for all and is ideal
+# no multi collinearity detected in model 1 , model 2 or model 3
+#vif(model1)
+vif(model2)
+vif(model3)
+
+plot(model3)
+
+#no correlation between X variables and residuals
+cor.test(data$Adults.19.25, model1$residuals)
+cor.test(data$Adults.19.25, model2$residuals)
+cor.test(data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         model2$residuals)
+cor.test(data$Adults.19.25, model3$residuals)
+cor.test(data$Weekly.UI.maximum.amount.with.extra.stimulus..through.July.31..2020...dollars.,
+         model3$residuals)
+
+
+#gvlma
+par(mfrow=c(2,2))  # draw 4 plots in same window
+
+gvlma::gvlma(model3)
+plot(model3)
+
+gvlma::gvlma(model2)
+plot(model2)
+#1) Global Stat This is the overall metric; this states whether the model, as a whole, passes or fails.
+
+#2) Skewness <- measuring the distribution
+
+#3) Kurtosis <- measuring the distribution, outliers, influential data, etc
+
+#4) Link function <- misspecified model, how you linked the elements in the model assignment
+
+#5) Heteroscedasticity <- looking for equal variance in the residuals
+
+gvlma::gvlma(model1)
+plot(model1)
+
+#Statisticians have developed a metric called Cook’s distance to determine the influence of a value. This metric defines influence as a combination of leverage and residual size.
+#A rule of thumb is that an observation has high influence if Cook’s distance exceeds 4/(n - p - 1)(P. Bruce and Bruce 2017), where n is the number of observations and p the number of predictor variables.
+#The Residuals vs Leverage plot can help us to find influential observations if any. On this plot, outlying values are generally located at the upper right corner or at the lower right corner. Those spots are the places where data points can be influential against a regression line.
+#The following plots illustrate the Cook’s distance and the leverage of our model:
+
+# Cook's distance
+plot(model3, 4)
+plot(model2, 4)
+data[c(9), 1:5]
+
+# Residuals vs Leverage
+plot(model3, 5)
+plot(model2, 5)
+```
+
+```{r section 4 regression table, results = "asis"}
+# rename columns for clean regression table output
+data <- clean_names(data)
+names(data)[names(data) == "weekly_ui_maximum_amount_with_extra_stimulus_through_july_31_2020_dollars"] <- "weekly_ui"
+names(data)[names(data) == "population_density_per_square_miles"] <- "pop_density"
+model1 <- lm(data$case_rate_per_100000 ~ data$adults_19_25)
+model2 <- lm(data$case_rate_per_100000 ~  data$adults_19_25 + data$weekly_ui)
+model3 <- lm(data$case_rate_per_100000 ~data$adults_19_25 + data$weekly_ui + data$days_till_stay_at_home + data$days_till_emp_mask + data$gov_party + data$pop_density + data$tests_per_100k)
+
+# create regression table
+stargazer(model1, title = "Model 1", type = 'latex')
+stargazer(model2, title = "Model 2", type = 'latex')
+stargazer(model3, title = "Model 3", type = 'latex')
+stargazer(model1, model2, model3, title = "Regression Table", type = 'latex')
+```
+
+```{r section 4 regression table interpretation}
+# interpret regression table results
+summary(model2)
+
+model0 <- lm(data$case_rate_per_100000 ~ 1)
+anova(model0, model1, test = 'F')
+anova(model0, model2, test = 'F')
+
+anova(model1, model2, test = 'F')
+anova(model2, model3, test = 'F')
+
+median(data$case_rate_per_100000)
+summary(data$case_rate_per_100000)
+```
