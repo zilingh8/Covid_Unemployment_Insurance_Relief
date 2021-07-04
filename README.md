@@ -2,7 +2,7 @@
 
 In this group school project, we look at Covid-19 data to answer our chosen research question:
 
-### How effective is Unemployment Insurance and Stimuls Relief at reducing infection rate per 100,000 people across US States?
+### How effective is Unemployment Insurance and Stimulus Relief at reducing infection rate per 100,000 people across US States?
 
 We apply linear regression to study and analyze the spread of Covid.
 
